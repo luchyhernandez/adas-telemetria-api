@@ -1,6 +1,6 @@
 import time
 from typing import Optional, List
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -9,10 +9,20 @@ app = FastAPI(title="ADAS Telemetry & Config Server")
 # ================= MODELOS DE DATOS =================
 
 class EventoADAS(BaseModel):
-    timestamp: int
-    tipo_evento: str
-    valor_medido: float
-    alerta_activa: int
+    # Formato original enviado por la ESP32-P4
+    event_id: Optional[int] = None
+    uptime_ms: Optional[int] = None
+    event_type: Optional[str] = None
+    duration_ms: Optional[int] = None
+    head_x: Optional[float] = None
+    head_y: Optional[float] = None
+    alert_sent: Optional[int] = None
+
+    # Compatibilidad con el formato anterior de pruebas TTGO
+    timestamp: Optional[int] = None
+    tipo_evento: Optional[str] = None
+    valor_medido: Optional[float] = None
+    alerta_activa: Optional[int] = None
     bateria_pct: Optional[int] = 100
 
 class ConfiguracionADAS(BaseModel):
@@ -40,17 +50,79 @@ telemetria_actual = {
 
 @app.post("/api/v1/eventos")
 def recibir_evento(evento: EventoADAS):
-    data = evento.model_dump()
+    # Formato original de la ESP32-P4: conservar todos sus campos.
+    if evento.event_id is not None or evento.event_type is not None:
+        required = {
+            "event_id": evento.event_id,
+            "uptime_ms": evento.uptime_ms,
+            "event_type": evento.event_type,
+            "duration_ms": evento.duration_ms,
+            "head_x": evento.head_x,
+            "head_y": evento.head_y,
+            "alert_sent": evento.alert_sent,
+        }
+        missing = [key for key, value in required.items() if value is None]
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Faltan campos del evento P4: {', '.join(missing)}"
+            )
+
+        data = {
+            "event_id": evento.event_id,
+            "uptime_ms": evento.uptime_ms,
+            "event_type": evento.event_type,
+            "duration_ms": evento.duration_ms,
+            "head_x": evento.head_x,
+            "head_y": evento.head_y,
+            "alert_sent": evento.alert_sent,
+            "bateria_pct": evento.bateria_pct if evento.bateria_pct is not None else 100,
+
+            # Alias para mantener operativos los indicadores del dashboard.
+            "timestamp": evento.uptime_ms,
+            "tipo_evento": evento.event_type,
+            "valor_medido": float(evento.duration_ms),
+            "alerta_activa": int(evento.alert_sent),
+        }
+        ultimo_evento = evento.event_type
+        valor_medido = float(evento.duration_ms)
+        alerta_activa = int(evento.alert_sent)
+
+    else:
+        # Compatibilidad con los POST antiguos PRUEBA_TTGO.
+        if (
+            evento.timestamp is None
+            or evento.tipo_evento is None
+            or evento.valor_medido is None
+            or evento.alerta_activa is None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="El evento no coincide con el formato P4 ni con el formato anterior"
+            )
+
+        data = {
+            "timestamp": evento.timestamp,
+            "tipo_evento": evento.tipo_evento,
+            "valor_medido": evento.valor_medido,
+            "alerta_activa": evento.alerta_activa,
+            "bateria_pct": evento.bateria_pct if evento.bateria_pct is not None else 100,
+        }
+        ultimo_evento = evento.tipo_evento
+        valor_medido = evento.valor_medido
+        alerta_activa = evento.alerta_activa
+
     eventos_db.append(data)
-    
     if len(eventos_db) > 100:
         eventos_db.pop(0)
 
-    telemetria_actual["bateria_pct"] = evento.bateria_pct if evento.bateria_pct is not None else 100
+    telemetria_actual["bateria_pct"] = (
+        evento.bateria_pct if evento.bateria_pct is not None else 100
+    )
     telemetria_actual["ultimo_sync"] = int(time.time())
-    telemetria_actual["ultimo_evento"] = evento.tipo_evento
-    telemetria_actual["valor_medido"] = evento.valor_medido
-    telemetria_actual["alerta_activa"] = evento.alerta_activa
+    telemetria_actual["ultimo_evento"] = ultimo_evento
+    telemetria_actual["valor_medido"] = valor_medido
+    telemetria_actual["alerta_activa"] = alerta_activa
 
     return {"status": "ok", "recibido": data}
 
@@ -136,9 +208,9 @@ def index():
                 </div>
 
                 <div class="card">
-                    <h3>Métrica (EAR)</h3>
+                    <h3>Duración del evento</h3>
                     <div id="metrica-val" class="metric">0.00</div>
-                    <span style="font-size: 12px; color: #65676b;">Apertura Ocular</span>
+                    <span style="font-size: 12px; color: #65676b;">Milisegundos</span>
                 </div>
 
                 <div class="card">
@@ -178,15 +250,17 @@ def index():
             <table>
                 <thead>
                     <tr>
-                        <th>Timestamp (P4)</th>
-                        <th>Tipo de Evento</th>
-                        <th>Métrica</th>
-                        <th>Alerta</th>
-                        <th>Batería</th>
+                        <th>ID</th>
+                        <th>Uptime (ms)</th>
+                        <th>Evento</th>
+                        <th>Duración (ms)</th>
+                        <th>Head X</th>
+                        <th>Head Y</th>
+                        <th>Alerta enviada</th>
                     </tr>
                 </thead>
                 <tbody id="eventos-body">
-                    <tr><td colspan="5" style="text-align: center; color: #888;">Cargando historial...</td></tr>
+                    <tr><td colspan="7" style="text-align: center; color: #888;">Cargando historial...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -267,15 +341,17 @@ def index():
                     const tbody = document.getElementById('eventos-body');
                     
                     if (eventos.length === 0) {
-                        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #888;">No hay eventos registrados aún.</td></tr>';
+                        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #888;">No hay eventos registrados aún.</td></tr>';
                     } else {
                         tbody.innerHTML = eventos.map(e => `
                             <tr>
-                                <td>${e.timestamp}</td>
-                                <td><b>${e.tipo_evento}</b></td>
-                                <td>${Number(e.valor_medido).toFixed(2)}</td>
-                                <td>${e.alerta_activa === 1 ? '<span style="color:red; font-weight:bold;">SI</span>' : 'NO'}</td>
-                                <td>${e.bateria_pct !== undefined ? e.bateria_pct + '%' : 'N/A'}</td>
+                                <td>${e.event_id ?? '-'}</td>
+                                <td>${e.uptime_ms ?? e.timestamp ?? '-'}</td>
+                                <td><b>${e.event_type ?? e.tipo_evento ?? '-'}</b></td>
+                                <td>${e.duration_ms ?? e.valor_medido ?? '-'}</td>
+                                <td>${e.head_x !== undefined ? Number(e.head_x).toFixed(4) : '-'}</td>
+                                <td>${e.head_y !== undefined ? Number(e.head_y).toFixed(4) : '-'}</td>
+                                <td>${(e.alert_sent ?? e.alerta_activa) === 1 ? '<span style="color:red; font-weight:bold;">SI</span>' : 'NO'}</td>
                             </tr>
                         `).join('');
                     }
