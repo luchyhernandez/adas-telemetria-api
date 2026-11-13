@@ -1,12 +1,10 @@
 import time
 from typing import Optional, List
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="ADAS Telemetry Server")
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 class EventoADAS(BaseModel):
     # Formato enviado por la TTGO (evento original de la ESP32-P4)
