@@ -23,15 +23,15 @@ class EventoADAS(BaseModel):
     alerta_activa: Optional[int] = None
 
 class ConfiguracionADAS(BaseModel):
-    umbral_distraccion: float = Field(default=2.0, ge=0.0, le=10.0)
-    tiempo_somnolencia: float = Field(default=1.5, ge=0.0, le=10.0)
+    umbral_distraccion: float = Field(default=3.0, ge=0.0, le=10.0)
+    tiempo_somnolencia: float = Field(default=2.0, ge=0.0, le=10.0)
     volumen_alerta: int = Field(default=90, ge=0, le=100)
 
 # Almacenamiento en memoria (se conserva el comportamiento actual del servidor).
 eventos_db: List[dict] = []
 configuracion_actual = {
-    "umbral_distraccion": 2.0,
-    "tiempo_somnolencia": 1.5,
+    "umbral_distraccion": 3.0,
+    "tiempo_somnolencia": 2.0,
     "volumen_alerta": 90,
 }
 telemetria_actual = {
@@ -54,14 +54,15 @@ def recibir_evento(evento: EventoADAS):
     if not tipo:
         return {"status": "error", "detalle": "Falta event_type/tipo_evento"}
 
+    alerta = evento.alert_sent if evento.alert_sent is not None else (evento.alerta_activa or 0)
+    if int(alerta) != 1:
+        return {"status": "ignored", "detalle": "Evento sin alerta; no se almacena"}
+
     # Compatibilidad: se guardan los campos originales y los alias que usa el dashboard.
     data = dict(recibido)
     data["timestamp"] = int(time.time())  # hora de recepción en Render
     data["tipo_evento"] = tipo
-    data["alerta_activa"] = int(
-        evento.alert_sent if evento.alert_sent is not None
-        else (evento.alerta_activa or 0)
-    )
+    data["alerta_activa"] = int(alerta)
     # No se inventa una magnitud: valor_medido queda solo si llegó el campo antiguo.
     if evento.valor_medido is not None:
         data["valor_medido"] = evento.valor_medido
@@ -116,18 +117,18 @@ def index():
 <div class="card"><div class="card-label">Última comunicación</div><div class="metric small" id="sync-val">--</div><div class="sub" id="sync-note">Esperando telemetría</div></div>
 <div class="card"><div class="card-label">Eventos almacenados</div><div class="metric" id="count-val">--</div><div class="sub">Registros disponibles en memoria del servidor</div></div>
 </section>
-<div class="section-title"><h2>Parámetros temporales</h2><span>Valores informativos · Solo lectura</span></div><section class="params">
-<div class="card"><div class="card-label">Tiempo de distracción</div><div class="param-value" id="cfg-distraccion">-- s</div><span class="readonly">SOLO LECTURA</span></div>
-<div class="card"><div class="card-label">Tiempo de somnolencia</div><div class="param-value" id="cfg-somnolencia">-- s</div><span class="readonly">No implementado en esta versión</span></div></section>
-<div class="section-title"><h2>Historial de eventos</h2><span>Datos originales recibidos desde la ESP32-P4</span></div>
-<div class="table-wrap"><table><thead><tr><th>ID evento</th><th>Recepción Render</th><th>Uptime P4 (ms)</th><th>Tipo</th><th>Duración (ms)</th><th>Head X</th><th>Head Y</th><th>Alerta enviada</th><th>Batería TTGO</th></tr></thead><tbody id="eventos-body"><tr><td colspan="9" class="empty">Cargando historial...</td></tr></tbody></table></div>
+<div class="section-title"><h2>Parámetros temporales</h2></div><section class="params">
+<div class="card"><div class="card-label">Tiempo de distracción</div><div class="param-value" id="cfg-distraccion">-- s</div></div>
+<div class="card"><div class="card-label">Tiempo de somnolencia</div><div class="param-value" id="cfg-somnolencia">-- s</div></div></section>
+<div class="section-title"><h2>Historial de eventos</h2></div>
+<div class="table-wrap"><table><thead><tr><th>ID evento</th><th>Recepción Render</th><th>Tipo</th><th>Duración (ms)</th><th>Head X</th><th>Head Y</th><th>Alerta enviada</th></tr></thead><tbody id="eventos-body"><tr><td colspan="7" class="empty">Cargando historial...</td></tr></tbody></table></div>
 <footer>PROYECTO ADAS · UNIVERSIDAD TECNOLÓGICA NACIONAL · PANEL DE TELEMETRÍA</footer></div>
 <script>
 const fmt=v=>(v!==null&&v!==undefined&&Number.isFinite(Number(v)))?Number(v).toFixed(3):'--';
 async function cargarConfiguracion(){try{const r=await fetch('/api/v1/configuracion',{cache:'no-store'});if(!r.ok)throw Error();const c=await r.json();document.getElementById('cfg-distraccion').textContent=Number(c.umbral_distraccion).toFixed(2)+' s';document.getElementById('cfg-somnolencia').textContent=Number(c.tiempo_somnolencia).toFixed(2)+' s';}catch(e){console.error(e)}}
 async function actualizarDashboard(){const dot=document.getElementById('cloud-dot'),cloud=document.getElementById('cloud-status');try{const [tr,er]=await Promise.all([fetch('/api/v1/telemetria',{cache:'no-store'}),fetch('/api/v1/eventos',{cache:'no-store'})]);if(!tr.ok||!er.ok)throw Error('API no disponible');const t=await tr.json(),ev=await er.json();dot.className='dot online';cloud.textContent='Servidor conectado';const p=t.bateria_pct,bat=document.getElementById('bat-val'),bar=document.getElementById('bat-bar');if(p!==null&&p!==undefined){const n=Math.max(0,Math.min(100,Number(p)));bat.textContent=n+'%';bar.style.width=n+'%';bar.style.background=n>50?'linear-gradient(90deg,#35d4e8,#38d996)':n>20?'#ffc857':'#ff637d';document.getElementById('bat-note').textContent='Último valor informado por la TTGO';}else{bat.textContent='N/D';bar.style.width='0%';document.getElementById('bat-note').textContent='Medición no disponible';}
 document.getElementById('evento-val').textContent=t.ultimo_evento||'Ninguno';const b=document.getElementById('alerta-badge');if(Number(t.alerta_activa)===1){b.className='status bad';b.textContent='ALERTA ENVIADA';}else{b.className='status';b.textContent='Sin alerta enviada';}
-if(Number(t.ultimo_sync)>0){const d=new Date(Number(t.ultimo_sync)*1000);document.getElementById('sync-val').textContent=d.toLocaleTimeString();document.getElementById('sync-note').textContent=d.toLocaleDateString();}else{document.getElementById('sync-val').textContent='--';}document.getElementById('count-val').textContent=ev.length;const tb=document.getElementById('eventos-body');if(!ev.length){tb.innerHTML='<tr><td colspan="9" class="empty">Todavía no hay eventos registrados.</td></tr>';}else{tb.innerHTML=ev.map(e=>`<tr><td>${e.event_id??'--'}</td><td>${e.timestamp?new Date(e.timestamp*1000).toLocaleString():'--'}</td><td>${e.uptime_ms??'--'}</td><td class="event-tag">${e.event_type??e.tipo_evento??'--'}</td><td>${e.duration_ms??'--'}</td><td>${fmt(e.head_x)}</td><td>${fmt(e.head_y)}</td><td>${Number(e.alert_sent??e.alerta_activa)===1?'Sí':'No'}</td><td>${e.bateria_pct==null?'N/D':e.bateria_pct+'%'}</td></tr>`).join('');}}
+if(Number(t.ultimo_sync)>0){const d=new Date(Number(t.ultimo_sync)*1000);document.getElementById('sync-val').textContent=d.toLocaleTimeString();document.getElementById('sync-note').textContent=d.toLocaleDateString();}else{document.getElementById('sync-val').textContent='--';}document.getElementById('count-val').textContent=ev.length;const tb=document.getElementById('eventos-body');if(!ev.length){tb.innerHTML='<tr><td colspan="7" class="empty">Todavía no hay eventos registrados.</td></tr>';}else{tb.innerHTML=ev.map(e=>`<tr><td>${e.event_id??'--'}</td><td>${e.timestamp?new Date(e.timestamp*1000).toLocaleString():'--'}</td><td class="event-tag">${e.event_type??e.tipo_evento??'--'}</td><td>${e.duration_ms??'--'}</td><td>${fmt(e.head_x)}</td><td>${fmt(e.head_y)}</td><td>${Number(e.alert_sent??e.alerta_activa)===1?'Sí':'No'}</td></tr>`).join('');}}
 catch(e){dot.className='dot';cloud.textContent='Sin comunicación con API';document.getElementById('sync-note').textContent='No se pudo actualizar la telemetría';console.error(e)}}
 cargarConfiguracion();actualizarDashboard();setInterval(actualizarDashboard,3000);setInterval(cargarConfiguracion,30000);
 </script></body></html>'''
