@@ -117,7 +117,7 @@ def index():
 <div class="card"><div class="card-label">Última comunicación</div><div class="metric small" id="sync-val">--</div><div class="sub" id="sync-note">Esperando telemetría</div></div>
 <div class="card"><div class="card-label">Eventos almacenados</div><div class="metric" id="count-val">--</div><div class="sub">Registros disponibles en memoria del servidor</div></div>
 </section>
-<div class="section-title"><h2>Parámetros temporales</h2></div><section class="params">
+<div class="section-title"><h2>Parámetros </h2></div><section class="params">
 <div class="card"><div class="card-label">Tiempo de distracción</div><div class="param-value" id="cfg-distraccion">-- s</div></div>
 <div class="card"><div class="card-label">Tiempo de somnolencia</div><div class="param-value" id="cfg-somnolencia">-- s</div></div></section>
 <div class="section-title"><h2>Historial de eventos</h2></div>
